@@ -4120,6 +4120,53 @@ class PressAndConfirmTests(unittest.TestCase):
         assert (report.wall.price, report.wall.resource) == (1600000, "elixir")
         assert report.offer is None
 
+    def test_a_wall_menu_one_look_cannot_read_is_looked_at_again(self) -> None:
+        """The home village's plates are translucent: the first frame's gold price does not read."""
+        adb, report = self._run(
+            [
+                "home_wall_batch_unread.png",
+                "home_wall_batch.png",
+                "night_wall_dialog.png",
+                "hud_day_build_panel.png",
+            ],
+            lambda d: commands.confirm(26400000, d, "gold"),
+        )
+        assert [call.args for call in adb.tap.call_args_list] == [
+            (497, 790, DISPLAY),
+            (973, 560, DISPLAY),
+        ]
+        assert report.outcome == "confirmed"
+        assert report.wall is not None
+        assert (report.wall.price, report.wall.resource) == (26400000, "gold")
+
+    def test_a_dialog_that_comes_up_between_two_looks_takes_the_wall_menu_away(self) -> None:
+        """Every look is held to the standing-dialog test, not only the first."""
+        standing = GameDialog(confirm=(973, 560), cancel=(623, 572))
+        with patch.object(commands, "game_dialog", side_effect=[None, standing]):
+            adb, report = self._run(
+                ["home_wall_batch_unread.png", "home_wall_batch.png"],
+                lambda d: commands.confirm(26400000, d, "gold"),
+            )
+        adb.tap.assert_not_called()
+        assert report.outcome == "no_wall_menu"
+
+    def test_the_frame_kept_is_the_one_the_wall_menu_was_read_off(self) -> None:
+        adb, report = self._run(
+            ["home_wall_batch_unread.png", "home_wall_batch.png"],
+            lambda d: commands.confirm(26400001, d, "gold"),
+        )
+        adb.tap.assert_not_called()
+        assert report.outcome == "price_mismatch"
+        assert report.frame.read_bytes() == (FRAMES / "home_wall_batch.png").read_bytes()
+
+    def test_a_panel_with_no_wall_menu_is_looked_at_a_few_times_and_no_more(self) -> None:
+        adb, report = self._run(
+            ["hud_night_build_panel.png"], lambda d: commands.confirm(1600000, d, "elixir")
+        )
+        adb.tap.assert_not_called()
+        assert report.outcome == "no_wall_menu"
+        assert adb.screenshot.call_count == commands.WALL_MENU_LOOKS
+
     def test_a_single_wall_is_paid_through_its_button_and_then_its_sheet(self) -> None:
         adb, report = self._run(
             ["night_wall_menu.png", "night_sheet_wall.png", "night_wall_menu.png"],
