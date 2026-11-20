@@ -1057,6 +1057,85 @@ class NightPlan(BaseModel):
     reason: str = ""
 
 
+GridCorner = Literal["top", "right", "bottom", "left"]
+
+
+class BaseGrid(BaseModel):
+    """The diamond a village's red deployment line fits in, as its four corners on screen.
+
+    It is the line's bounding box along the map's own two directions, so a
+    base that is not square leaves ground inside it: `empty` names the corners
+    on screen the line does not reach.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    top: tuple[int, int]
+    right: tuple[int, int]
+    bottom: tuple[int, int]
+    left: tuple[int, int]
+    empty: list[GridCorner] = Field(default_factory=list)
+
+    def at(self, across: float, down: float) -> tuple[float, float]:
+        """The point `across` of the way from the top corner to the right one and `down` of the way to the left one."""
+        return (
+            self.top[0]
+            + (self.right[0] - self.top[0]) * across
+            + (self.left[0] - self.top[0]) * down,
+            self.top[1]
+            + (self.right[1] - self.top[1]) * across
+            + (self.left[1] - self.top[1]) * down,
+        )
+
+
+class PlannedDrop(BaseModel):
+    """One step of a plan as it would land on one frame, which is what `ai_coc draw` draws."""
+
+    # `machine` is the builder base's, whose plan has no steps to name it.
+    act: Literal["siege", "troops", "hero", "ability", "rage", "freeze", "machine"]
+    who: HeroKind = "unknown"
+    # The plan's own clock: every `wait` before this step, added up.
+    seconds: int
+    # The lines troops are spread along: one at home, a band of them on the builder base.
+    lines: list[list[tuple[int, int]]] = Field(default_factory=list)
+    # Where each one-off card or bottle lands, a spot twice when two bottles do.
+    at: list[tuple[int, int]] = Field(default_factory=list)
+    # Spell points of the plan no bottle is known to reach: the row has none
+    # left for them, or there is no row to count bottles off.
+    unused: list[tuple[int, int]] = Field(default_factory=list)
+    # How many cards on the frame's row this step would send; None with no row to count.
+    cards: int | None = None
+
+
+class CardRow(BaseModel):
+    """What a frame's card row holds, which is the army a picture of a plan assumes."""
+
+    # Each troop card's count, None where its corner would not read.
+    troops: list[int | None]
+    # The cards with no count: the siege machine and the heroes at home, the
+    # machines still alive on the builder base. Nothing on the row says which
+    # hero a card is.
+    singles: int
+    # Each spell card's bottles, own and donated cards apart as the row has them.
+    rages: list[int | None] = Field(default_factory=list)
+    freezes: list[int | None] = Field(default_factory=list)
+
+
+class PlannedTactic(BaseModel):
+    """Where a whole plan would land on one frame (`ui.attack.planned_drops`)."""
+
+    # The card row the steps were worked out for; None on a frame with no row,
+    # where nothing says how many cards or bottles a step would have.
+    row: CardRow | None
+    # Whether the troops' flank was bent onto the red line read off this frame.
+    fitted: bool
+    # How far the loop would drag the camera before its first drop were this
+    # frame the battle's opening, down being positive; None where the village
+    # will not measure, or the camera had already been dragged.
+    drag: int | None
+    steps: list[PlannedDrop]
+
+
 # How one round of the attack loop ended, which is the field a farming session
 # actually decides on and was a sentence for the whole of this project's life.
 #
@@ -3242,6 +3321,54 @@ class DonateOptions(BaseModel):
     dry_run: bool = False
     # 0 gives until the request is full or the village has nothing left.
     rounds: int = 0
+
+
+class DrawOptions(BaseModel):
+    """What one `ai_coc draw` was asked to draw, and on which frame."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # The frame itself, or the attack run whose newest battle kept one: its
+    # directory, its name or its `--label`.
+    png: Path | None = None
+    run: Path | None = None
+    # How far the battle camera had been dragged when `png` was taken; a run's
+    # own log says so for the frame it kept.
+    camera: tuple[int, int] = (0, 0)
+    # A plan by name (`plans.NAMES`), read for `world`, or by path.
+    plan: str = "flat"
+    world: World = "day"
+    # A second plan whose own marks are drawn in white dashes, to hold `plan` against.
+    against: str | None = None
+    # Draw the plan without the grid or the grid without a plan; None draws both.
+    only: Literal["plan", "grid"] | None = None
+    # A later frame of the same battle to paint on instead, to see where the
+    # army stood against the grid and the plan read off the frame above.
+    on: Path | None = None
+
+
+DrawOutcome = Literal["drawn", "no_frame"]
+
+
+class DrawReport(BaseModel):
+    """What `ai_coc draw` drew: the picture, and the same facts as numbers."""
+
+    outcome: DrawOutcome
+    image: Path | None = None
+    frame: Path | None = None
+    # The later frame of the same battle the marks were painted on, when one was asked for.
+    on: Path | None = None
+    # How far the battle camera had been dragged when the frame was taken.
+    camera: tuple[int, int] = (0, 0)
+    # The plan drawn and the village it is for; None for the grid alone.
+    plan: str | None = None
+    world: World | None = None
+    against: str | None = None
+    # What was asked for alone (`--only`); None is both the plan and the grid.
+    only: Literal["plan", "grid"] | None = None
+    # None with a grid asked for is a frame whose red line would not read.
+    grid: BaseGrid | None = None
+    tactic: PlannedTactic | None = None
 
 
 class FrameReading(BaseModel):
