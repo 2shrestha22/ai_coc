@@ -10,7 +10,7 @@
 
 **在主 checkout (預設分支) 上跑, 每個指令都寫成 `uv run --no-sync ai_coc …`**, `stop` 也一樣: 開發在另一個 worktree 做, 理由在 `AGENTS.md` 的 The loop runs the main checkout. 真的要同步 (merge 帶進新的依賴, 指令 import 失敗) 就等手上的程序結束再 `uv sync`; sync 要等沒有任何 `ai_coc` 程序在跑, 睡著的 `ai_coc watch` 也算, 那不是你的就停下來回報.
 
-**每一個 `ai_coc` 指令都帶 `--agent`、`--session`、`--mission`**: 你自己的名字 (`claude-code`、`antigravity`、`codex`), 派你的 session id 加上 `-farm` 後綴 (`<派工的 session id>-farm`), 這一趟在做什麼 (一句話). 一定要跟派工的不一樣: 排隊不看 session, 借用卻是照 session 認借的人, 用同一個 id 的話, 你不帶 `--yield` 的指令會被當成借的那一邊, 把借用一直撐著不還給你自己的迴圈.
+**每一個 `ai_coc` 指令都帶 `--agent`、`--session`、`--mission`**: 你自己的名字 (`claude-code`、`antigravity`、`codex`), `--session` 的值, 這一趟在做什麼 (一句話). 交辦已經給了 `--session` 的值 (已經帶 `-farm`) 就照抄, 每一個指令都用那個值, `capture` 也一樣, 不要再加一個 `-farm`; 沒有交辦可抄 (派工的 session 自己照這份跑) 才自己組成 `<派工的 session id>-farm`. 一定要跟派工的不一樣: 排隊不看 session, 借用卻是照 session 認借的人, 用同一個 id 的話, 你不帶 `--yield` 的指令會被當成借的那一邊, 把借用一直撐著不還給你自己的迴圈.
 
 **會佔模擬器的指令都帶 `--yield`**, `world --day` / `--night` 跟 `attack` 都要: 那是背景工作, 不會把別人的 run 停掉, 模擬器有人在用就排隊等; 別人要用時它是被借走, 不是被停掉 (見「被叫停, 被借走」). 不佔模擬器的 `capture`、`wait` 跟 `stop` 沒有這個旗標, 帶了指令會被拒絕 (exit code 2, 什麼都沒跑).
 
@@ -27,8 +27,8 @@
 **先切到要打的村莊, 再開.** `attack` 打的是遊戲當下停著的村莊, 遊戲會開在上次離開的那一個, 而沒有指令會自己坐船:
 
 ```bash
-uv run --no-sync ai_coc world --day --yield --label <標籤> --agent <名字> --session <派工的 session id>-farm --mission "打日世界資源"
-uv run --no-sync ai_coc attack --repeat 0 --plan flat --yield --label <標籤> --agent <名字> --session <派工的 session id>-farm --mission "打日世界資源"
+uv run --no-sync ai_coc world --day --yield --label <標籤> --agent <名字> --session <--session 的值> --mission "打日世界資源"
+uv run --no-sync ai_coc attack --repeat 0 --plan flat --yield --label <標籤> --agent <名字> --session <--session 的值> --mission "打日世界資源"
 ```
 
 `world --day` / `--night` 回的不是那個村莊 (`crossing_failed`) 就不要開 `attack`, 停下來回報. 船的標記點了而畫面沒動的那一種 (#665), 它先拉近一格再點一次, 還是不動才自己重開遊戲再坐一次 (多一分鐘上下), 回的 `restarted` 是 true: 這時的 `crossing_failed` 或 `no_village` 是重開過還坐不成, 回報時講明, 不用你再重開一次.
@@ -36,7 +36,7 @@ uv run --no-sync ai_coc attack --repeat 0 --plan flat --yield --label <標籤> -
 **你要在前景阻塞.** 沒有人在跟你講話, 背景指令跑完也不保證叫得醒一個已經結束回合的 subagent, 所以 subagent 把指令 (或等它的迴圈) 丟到背景再結束回合, 就會停在那裡不動. 而一次阻塞的呼叫有 runtime 自己的 timeout 上限 (常見是十分鐘, 預設值往往更短; Claude Code 把 subagent 跑到 180 秒的前景呼叫自己移到背景, timeout 給 590 秒也一樣), 所以分段等: 一段比那個上限短, **那次呼叫的 timeout 要設得比一段長** (沒設的話一段還沒等完就被砍), 等不到就再下一段. **分段的只有等待, 指令本身用 runtime 自己的背景執行開**, 在另外幾次前景呼叫裡等它: `attack` 一跑就超過一次呼叫的上限, 而指令被砍等於把軍隊丟在場上. 所以不要替它包 `timeout`, 也不要用 shell 的 `&` 或 `nohup` 丟出去 (exit code 跟輸出都回不來); 一個 subagent 用 `timeout 590` 包住 `attack`, 時間一到就砍在一輪中間, 沒有 `result.json`, 那次已經打完的五輪只剩 `run.log` 數得出來. 每一段用 `ai_coc wait` 等, 它不佔模擬器, 給它開跑時的 `--label`:
 
 ```bash
-uv run --no-sync ai_coc wait <標籤> --for 150 --agent <名字> --session <派工的 session id>-farm --mission "等打日世界資源那一步"
+uv run --no-sync ai_coc wait <標籤> --for 150 --agent <名字> --session <--session 的值> --mission "等打日世界資源那一步"
 ```
 
 一段 150 秒, 短過上面那 180 秒, 那次呼叫的 timeout 給 200 秒以上. run 一結束它就提早回來, 回一個 JSON, 看 `outcome`:
