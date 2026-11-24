@@ -27,7 +27,15 @@ from collections import Counter
 
 from PIL import Image
 
-from ai_coc.models import World, GameDialog, SheetOffer, GoblinOffer, PanelWallMenu, SheetResource
+from ai_coc.models import (
+    World,
+    GameDialog,
+    HelperName,
+    SheetOffer,
+    GoblinOffer,
+    PanelWallMenu,
+    SheetResource,
+)
 from ai_coc.parsers.home import build_panel_open
 from ai_coc.parsers.frame import open_frame
 from ai_coc.parsers.scout import read_stock
@@ -166,6 +174,11 @@ DIALOG_FLAT = 22
 # of it and stops short of the button row below. Measured, the two buttons land
 # in the same place on every dialog the game raises: 確定 spans x 825-1122 and
 # 取消 x 476-771, on the 升級城牆 confirmation and on 確定退出遊戲嗎 alike.
+# **So 取消 lies wholly left of 確定, and orange that does not is no 取消.** The
+# Helper Hut's dispatch dialog (2026-11-24) is the same pale panel with one
+# green 確認 carrying the helper's face, x 615-986, and the face read as 取消 at
+# (669, 695), inside it: `tap` let a press there through and `_home` would have
+# answered the dialog by pressing 確認.
 BUTTON_SPAN = (420, 1180)
 BUTTON_BAND = (330, 720)
 CONFIRM_GREEN = 200
@@ -286,8 +299,10 @@ def _is_cancel(red: int, green: int, blue: int) -> bool:
     )
 
 
-def _button_middle(image: Image.Image, test: Callable[[int, int, int], bool]) -> tuple[int, int]:
-    """The middle of the one button on the dialog painted in this hue."""
+def _button_box(
+    image: Image.Image, test: Callable[[int, int, int], bool]
+) -> tuple[int, int, int, int]:
+    """The box round the one button on the dialog painted in this hue."""
     left, right = BUTTON_SPAN
     top, bottom = BUTTON_BAND
     band = image.crop((left, top, right, bottom))
@@ -300,7 +315,7 @@ def _button_middle(image: Image.Image, test: Callable[[int, int, int], bool]) ->
             pixel = offset // 3
             xs.append(pixel % width)
             ys.append(pixel // width)
-    return left + (min(xs) + max(xs)) // 2, top + (min(ys) + max(ys)) // 2
+    return left + min(xs), top + min(ys), left + max(xs), top + max(ys)
 
 
 def game_dialog(png: bytes) -> GameDialog | None:
@@ -326,15 +341,20 @@ def game_dialog(png: bytes) -> GameDialog | None:
     if flat / (len(panel) // 3) < DIALOG_PALE:
         return None
     try:
-        return GameDialog(
-            confirm=_button_middle(image, _is_confirm), cancel=_button_middle(image, _is_cancel)
-        )
+        confirm, cancel = _button_box(image, _is_confirm), _button_box(image, _is_cancel)
     except ValueError:
         # `min` over an empty list: the panel is up but one of the two buttons
         # is not on it. Answering None rather than half a dialog keeps a caller
         # from reaching for the button that was found because the other was not.
         logger.warning("A dialog panel is up but its buttons were not both found")
         return None
+    if cancel[2] >= confirm[0]:
+        logger.info("A dialog panel is up but its orange is not left of its green: no 取消")
+        return None
+    return GameDialog(
+        confirm=((confirm[0] + confirm[2]) // 2, (confirm[1] + confirm[3]) // 2),
+        cancel=((cancel[0] + cancel[2]) // 2, (cancel[1] + cancel[3]) // 2),
+    )
 
 
 # A building's upgrade does not confirm in the little dialog a wall's does. It
@@ -912,6 +932,160 @@ def goblin_offer(png: bytes) -> GoblinOffer | None:
         return None
     left, top, right, bottom = button
     return GoblinOffer(gems=gems, point=((left + right) // 2, (top + bottom) // 2))
+
+
+# **The Helper Hut's window**, which the plate the build panel floats left of
+# itself opens (2026-11-24): the builders' tab floats the Builder's
+# Apprentice's, the laboratory's the Lab Assistant's, both at this point. It
+# shows while the helper can be sent (可用 beside its face) or works (its
+# countdown), and not while it cools down, when the map lies under the point.
+# So it is read before it is tapped: the face's yellow headgear and the white
+# writing beside it. Over every panel frame committed or recorded, the plate
+# reads 0.240 to 0.296 yellow and 0.025 to 0.098 white, and no frame without
+# it passes both: the most yellow reads 0.185 (with no white), the most white
+# 0.037 (with 0.045 yellow).
+HELPER_PLATE = (1060, 377)
+PLATE_FACE_BOX = (1100, 345, 1150, 380)
+PLATE_TEXT_BOX = (990, 365, 1095, 392)
+PLATE_YELLOW = 0.21
+PLATE_WHITE = 0.015
+# Its X sits where a home village sheet's does (0.273 red in this box on the
+# hut, 0.247 on `hud_settings`, the sheets 0.273), so what tells the hut is the
+# white frame round the portrait of the helper it shows: 0.677 white along the
+# top of the frame on all eight hut frames, at most 0.333 in either box on every
+# other frame committed or recorded. The portraits run Lab Assistant (12) then
+# Builder's Apprentice (8), then the Alchemist and the Prospector.
+HUT_X_BOX = (1390, 47, 1436, 93)
+HUT_X_RED = 0.2
+HUT_RIMS: dict[HelperName, tuple[int, int, int, int]] = {
+    "assistant": (190, 694, 290, 700),
+    "apprentice": (330, 694, 430, 700),
+}
+HUT_RIM_WHITE = 0.5
+HUT_PORTRAITS: dict[HelperName, tuple[int, int]] = {
+    "assistant": (240, 760),
+    "apprentice": (380, 760),
+}
+HUT_CLOSE = (1413, 70)
+# Under 進行中的升級 each running job of the slot is a row with its green 指派
+# on the right, longest time left first, four rows showing at once. A whole
+# button is 4 938 to 4 940 px of this green, one cut off by the list's edge at
+# most 2 117. Opened, the four buttons are middled at these heights; scrolled to
+# the end, the last four at the second set (seven builder jobs, 2026-11-24).
+HUT_ROW_BOX = (1285, 325, 1410, 712)
+HUT_ROW_GREEN = ((90, 200), (150, 245), (30, 150))
+HUT_ROW_PATCH = 4000
+HUT_ROWS_TOP = (373, 458, 543, 628)
+HUT_ROWS_END = (407, 492, 577, 662)
+HUT_ROW_SLACK = 6
+HUT_ASSIGN_X = 1347
+# A drag up the list over the jobs' names, longer than the 306 px eight jobs
+# scroll; seven scrolled 221.
+HUT_SCROLL = ((900, 660), (900, 300))
+# **指派 opens a dialog of its own** (要加速X項目嗎？): a pale panel, its X top
+# right, and one green 確認 carrying the helper's face, no price and no gem
+# anywhere. Three readings, as the goblin's prompt takes: its X box reads 0.401
+# red against 0.565 on `welcome_back`, the panel box 1.000 pale against 0.991 on
+# `night_sheet_wall`, the button box 0.851 green against 0.340 on
+# `sheet_squad_elixir`; no other frame passes two of them.
+HELPER_PROMPT_X_BOX = (1180, 110, 1244, 172)
+HELPER_PROMPT_PANEL_BOX = (700, 205, 1240, 335)
+HELPER_PROMPT_BUTTON_BOX = (720, 665, 980, 765)
+HELPER_PROMPT_X_RED = 0.3
+HELPER_PROMPT_PALE = 0.95
+HELPER_PROMPT_GREEN = 0.6
+HELPER_PROMPT_CLOSE = (1211, 140)
+HELPER_CONFIRM = (840, 715)
+# 將被指派直到升級完成, which sends the helper back to the job after every
+# cooldown until the level is done (the export's `helper_recurrent`). It comes
+# up unticked and **the game keeps it as it was last left for each helper**,
+# closed by the X or not (2026-11-24). Ticked, its green check fills 0.234 of
+# this box; unticked 0.000.
+HELPER_CHECKBOX = (511, 588)
+HELPER_CHECK_BOX = (485, 560, 540, 615)
+HELPER_CHECK_GREEN = 0.12
+
+
+def helper_plate(png: bytes) -> bool:
+    """Whether the build panel floats the open tab's helper plate beside itself."""
+    image = open_frame(png)
+    return (
+        _share(image, PLATE_FACE_BOX, lambda r, g, b: r > 200 and 120 < g < 215 and b < 120)
+        >= PLATE_YELLOW
+        and _share(image, PLATE_TEXT_BOX, lambda r, g, b: min(r, g, b) >= 235) >= PLATE_WHITE
+    )
+
+
+def helper_hut(png: bytes) -> HelperName | None:
+    """Whose page the Helper Hut's window is open on, or None where it is not open on one of the two."""
+    image = open_frame(png)
+    if _share(image, HUT_X_BOX, lambda r, g, b: r >= 180 and g <= 80 and b <= 80) < HUT_X_RED:
+        return None
+    white = {
+        name: _share(image, box, lambda r, g, b: min(r, g, b) >= 245)
+        for name, box in HUT_RIMS.items()
+    }
+    shown = max(white, key=lambda one: white[one])
+    return shown if white[shown] >= HUT_RIM_WHITE else None
+
+
+def helper_rows(png: bytes) -> list[int]:
+    """How high each whole 指派 button in the hut's list is middled, top first."""
+    image = open_frame(png).crop(HUT_ROW_BOX)
+    return sorted(
+        HUT_ROW_BOX[1] + (patch.top + patch.bottom) // 2
+        for patch in patches(mask(image, HUT_ROW_GREEN), *image.size)
+        if patch.count >= HUT_ROW_PATCH
+    )
+
+
+def helper_prompt(png: bytes) -> bool:
+    """Whether the dialog that sends a helper to a job is up."""
+    image = open_frame(png)
+    return (
+        _share(image, HELPER_PROMPT_X_BOX, lambda r, g, b: r >= 180 and g <= 80 and b <= 80)
+        >= HELPER_PROMPT_X_RED
+        and _share(image, HELPER_PROMPT_PANEL_BOX, _goblin_pale) >= HELPER_PROMPT_PALE
+        and _share(image, HELPER_PROMPT_BUTTON_BOX, _goblin_green) >= HELPER_PROMPT_GREEN
+    )
+
+
+def helper_ticked(png: bytes) -> bool:
+    """Whether 將被指派直到升級完成 is ticked on the dispatch dialog."""
+    return _share(open_frame(png), HELPER_CHECK_BOX, _goblin_green) >= HELPER_CHECK_GREEN
+
+
+# **A recurring dispatch is stopped from the helper's face on the job's row**,
+# which carries a circling arrow while it recurs, where 指派 stands on the
+# other rows (2026-11-24, the helper at work, its row pinned first; between
+# its cooldown and its return it has not been seen). The tap raises 要停止連續作業嗎？, the
+# game's own two-button dialog: its 確認 stops the recurrence and leaves the
+# hour of work running and the cooldown as they are. Its boxes read exactly as
+# the wall dialogs' do (1.000 pale, 0.540 orange, 0.320 green), over the hut or
+# over the panel, so nothing tells the two questions apart and `helper` presses
+# its 確認 only right after its own tap on the face raised it. No other frame
+# passes two of the three: next come 0.066 orange on `battle_in_progress` and
+# 0.417 green on `goblin_builder_two_buttons`, whose panel box reads 0.601.
+# `game_dialog` misses it over the hut, whose grass and bars lie inside its span.
+HUT_RECURRING_X = 1345
+STOP_PANEL_BOX = (445, 232, 1165, 252)
+STOP_CANCEL_BOX = (500, 545, 750, 615)
+STOP_CONFIRM_BOX = (850, 545, 1100, 615)
+STOP_PALE = 0.95
+STOP_ORANGE = 0.4
+STOP_GREEN = 0.25
+STOP_CANCEL = (623, 580)
+STOP_CONFIRM = (973, 580)
+
+
+def helper_stop_prompt(png: bytes) -> bool:
+    """Whether the two-button dialog that stops a recurring dispatch is up, whatever lies behind it."""
+    image = open_frame(png)
+    return (
+        _share(image, STOP_PANEL_BOX, _goblin_pale) >= STOP_PALE
+        and _share(image, STOP_CANCEL_BOX, _is_cancel) >= STOP_ORANGE
+        and _share(image, STOP_CONFIRM_BOX, _goblin_green) >= STOP_GREEN
+    )
 
 
 # **A wall picked off the build panel opens a menu of its own beside it**, in

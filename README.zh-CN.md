@@ -94,6 +94,8 @@ ai_coc confirm --price 10800                 # 确认窗口要的价格刚好是
 ai_coc confirm --price 1600000 --pay gold    # 从面板选起来的那面墙, 用金币付
 ai_coc confirm --price 10800 --item "加农炮 12 级"  # 一样, 再把买的是什么记进记录给 tended 列
 ai_coc listprice --day                      # 面板上的价格旁没有划掉的原价了: status 不再照之前的折扣估
+ai_coc helper send apprentice 神盾勇者 --recurring  # 派建筑工人学徒 (assistant 是实验助手) 去帮日世界那件正在升的; --recurring 勾「将被指派直到升级完成」, 冷却完自己回去; 不花资源
+ai_coc helper cancel apprentice              # 停掉它的连续指派: 正在做的这一小时照做完, 冷却完不再回去
 ```
 
 升级都走建造面板, 城墙也是: `tap` 跟 `swipe` 负责点跟滚, 并留下按完的画面; `confirm` 是唯一会花钱的那一下, 只有确认窗口要的价格跟给的一样、而且是金币圣水黑水才按。加 `--pay` 时从面板点出来的城墙菜单开始: 那颗升级钮要的价格跟给的一样、而且买得起才按, 再按它跳出来的确认窗口或批次的对话框。
@@ -104,7 +106,7 @@ ai_coc listprice --day                      # 面板上的价格旁没有划掉�
 ai_coc collect                        # 把有东西的采集器全部收掉
 ai_coc status                         # 两个世界的升级实际几点好（药水算进去），加上这个世界的仓库、宝石和护盾，每个世界印成一张表，每件附下一级要多少、要多久（照那个世界一天内最近一次实付的折数估），三小时内到点的都续升而仓库付不完的每一项另印一行，还有还在跑的药水，和每个世界用 `note` 记下的交代；--json 印字段
 ai_coc status --last                  # 不碰游戏，从存下的最新导出印同样的表；--within 24 把之后才好的并成一行
-ai_coc watch --upgrades --lead 5 --tower --minutes 180   # 睡到这几个 (或 --next) 里最早的那个时间才结束，期间在 state.json 记下是谁在盯升级；放到后台跑
+ai_coc watch --upgrades --lead 5 --tower --helpers --minutes 180   # 睡到这几个 (或 --next) 里最早的那个时间才结束，期间在 state.json 记下是谁在盯升级；放到后台跑
 ai_coc note add "..." --seen 3fa2 --day   # 在 state.json 记下用户对一个世界的一条交代；`note` 连同交代版本列出来，`note done 1 --seen 3fa2 --day` 删掉一条；没带现在的版本就什么都不改
 ai_coc donate                         # 部落里有人要兵就捐
 ai_coc donate --dry-run               # 走完整个流程但停在真的捐出去之前
@@ -135,7 +137,7 @@ ai_coc export --last                  # 直接读上一次的结果,完全不碰
 ai_coc growth                         # 比对存下的最旧跟最新两份导出,列出两个世界升了什么;--start-date / --end-date 缩小范围
 ai_coc turnaround                     # 从运行记录算每次升级从到点到按下确认花了几秒,按王、实验室、建筑、战宠分;--since 指定起算时间 (ISO)
 ai_coc farmed --by <session> --since <时间>  # 从运行记录把一个 session 每一次打资源加起来, 每个世界一段; 不碰游戏
-ai_coc tended --by <session> --since <时间>  # 从运行记录列出一个 session 升了什么、各花多少, 开了几次钟塔, 被抢登几次; 不碰游戏
+ai_coc tended --by <session> --since <时间>  # 从运行记录列出一个 session 升了什么、各花多少, 开了几次钟塔, 派了几次助手, 被抢登几次; 不碰游戏
 ai_coc gamedata                       # 从模拟器上的游戏文件读出游戏自己的表(中英文名称、最高等级、每级的要求、标价和时间),每个游戏版本读一次,存在 ~/.ai_coc/game_data/<版本>/;--refresh 重新读
 ai_coc search "Electro Dragon"        # 按 data_id 或中英文名称的一段查那份表 (没有名字含这一段的就列名字最接近的几种, 并标明不是符合的),村庄里有的再列出等级、升级中几点好、下一级的标价和升到满级或上限总共要多少多久 (有最近实付的折数就附估计),没有的兵种和法术列出解锁要什么;--rows 每一行分开列;不碰游戏
 ai_coc search --section builder --day --skip-max-lvl  # 按分类列村庄里有的 (builder、lab、pets、equipment、helpers, 或 all), 两个世界各一段, 现在能升的按标价时间由短到长排前面; --day / --night 只留一个世界, --skip-max-lvl 不列满级的, 再给名称就在里面找

@@ -26,6 +26,7 @@ from ai_coc.models import (
     RunEnded,
     AttackRun,
     DrawReport,
+    HelperName,
     NoteAction,
     NoteReport,
     RunStarted,
@@ -34,6 +35,7 @@ from ai_coc.models import (
     UpgradeRole,
     AttackSeries,
     ExportReport,
+    HelperAction,
     RestartScope,
     AttackOptions,
     DonateOptions,
@@ -171,7 +173,7 @@ COMMANDS = (
             ),
             (
                 "tended",
-                "不碰遊戲，從紀錄列出一個 session 升了什麼、各花多少，開了幾次鐘塔，被搶登幾次",
+                "不碰遊戲，從紀錄列出一個 session 升了什麼、各花多少，開了幾次鐘塔，派了幾次助手，被搶登幾次",
             ),
             (
                 "search",
@@ -196,6 +198,11 @@ COMMANDS = (
                 "加 --goblin 是付寶石聘請哥布林工人",
             ),
             ("boost", "夜世界鐘塔能開時（上面有時鐘標記）按下它的免費加速；要寶石的不按"),
+            (
+                "helper",
+                "send 派建築工人學徒（apprentice）或實驗助手（assistant）去幫日世界一件正在升的，"
+                "cancel 停掉它的連續指派；不花資源，按之前跟之後各讀一次村莊匯出",
+            ),
             (
                 "listprice",
                 "不碰遊戲，記一筆這個世界的建造面板現在是牌價（價格旁沒有劃掉的原價）；"
@@ -224,7 +231,7 @@ COMMANDS = (
             ),
             (
                 "watch",
-                "睡到 --next、--upgrades、--tower、--minutes 裡最早的那個時間才結束，期間在狀態檔記下是誰在盯升級；丟到背景跑，結束時叫醒你",
+                "睡到 --next、--upgrades、--tower、--helpers、--minutes 裡最早的那個時間才結束，期間在狀態檔記下是誰在盯升級；丟到背景跑，結束時叫醒你",
             ),
             (
                 "wait",
@@ -374,6 +381,11 @@ def _watch_flags(
     watcher.add_argument(
         "--tower", action="store_true", help="也算進鐘塔能開的時間；現在就能開的不算"
     )
+    watcher.add_argument(
+        "--helpers",
+        action="store_true",
+        help="也算進建築工人學徒跟實驗助手能再派的時間；現在就能派的不算",
+    )
     watcher.add_argument("--minutes", type=int, metavar="分鐘", help="也算進現在起這麼多分鐘後")
     watcher.add_argument("--about", default="", metavar="說明", help="在等什麼，一句話")
     watcher.add_argument(
@@ -474,9 +486,12 @@ def _note_flags(noter: argparse.ArgumentParser) -> None:
 
 
 def _press_flags(
-    press: argparse.ArgumentParser, drag: argparse.ArgumentParser, buy: argparse.ArgumentParser
+    press: argparse.ArgumentParser,
+    drag: argparse.ArgumentParser,
+    buy: argparse.ArgumentParser,
+    sender: argparse.ArgumentParser,
 ) -> None:
-    """The hands the agent drives the build panel with.
+    """The hands the agent drives the build panel with, and `helper`, which drives it alone.
 
     They press where they are told and refuse only where a press would spend;
     reading the screen is the agent's, off the frame each one leaves. Their own
@@ -492,6 +507,27 @@ def _press_flags(
             "--wait", type=float, default=commands.PRESS_SETTLE, metavar="秒", help="等多久再截圖"
         )
     buy.add_argument("--price", type=int, required=True, help="在面板那一列讀到的價格")
+    sender.add_argument(
+        "action",
+        choices=get_args(HelperAction),
+        help="send 派去幫一件正在升的，cancel 停掉它的連續指派（這一趟照做完，冷卻完不再回去）",
+    )
+    sender.add_argument(
+        "helper",
+        choices=get_args(HelperName),
+        help="apprentice 建築工人學徒（幫工人那一格），assistant 實驗助手（幫實驗室那一格）",
+    )
+    sender.add_argument(
+        "item",
+        nargs="?",
+        default="",
+        help="send 要幫的那一件，遊戲的中文或英文名稱，一字不差（status 表上「項目」的寫法）",
+    )
+    sender.add_argument(
+        "--recurring",
+        action="store_true",
+        help="send 時勾「將被指派直到升級完成」：冷卻完自己回到同一件，直到這一級升完；不給就只幫這一趟",
+    )
     buy.add_argument("--item", metavar="名稱", help="買的是哪一件、升到幾級，記進紀錄給 tended 列")
     how = buy.add_mutually_exclusive_group()
     how.add_argument(
@@ -609,7 +645,9 @@ def _parser() -> argparse.ArgumentParser:
         help="out 拉遠到所有座標量測時的視野，in 拉近；預設 out",
     )
     camera.add_argument("--times", type=int, default=3, help="做幾次，已經到底的話多做無害")
-    _press_flags(sub.choices["tap"], sub.choices["swipe"], sub.choices["confirm"])
+    _press_flags(
+        sub.choices["tap"], sub.choices["swipe"], sub.choices["confirm"], sub.choices["helper"]
+    )
     # The game's own village export, which is the only complete account of what
     # the village holds and far more than any screen reader can see.
     village = sub.choices["export"]
@@ -748,7 +786,9 @@ def _answer(arguments: argparse.Namespace, run: RunLog) -> BaseModel | str:
         "giveback": lambda: commands.giveback(_caller(a)),
         "watch": lambda: commands.watch(
             _caller(a),
-            commands.wake_at(a.next, a.upgrades, a.lead, a.minutes, a.tower),
+            commands.wake_at(
+                a.next, a.upgrades, a.lead, a.minutes, tower=a.tower, helpers=a.helpers
+            ),
             a.about,
             run.directory,
             farms=a.farms,
@@ -779,6 +819,9 @@ def _answer(arguments: argparse.Namespace, run: RunLog) -> BaseModel | str:
         "swipe": lambda: commands.swipe((a.x1, a.y1), (a.x2, a.y2), run.frames, a.ms, a.wait),
         "confirm": lambda: commands.confirm(a.price, run.frames, a.pay, a.goblin, a.item),
         "boost": lambda: commands.boost(run.frames),
+        "helper": lambda: commands.helper(
+            a.action, a.helper, run.frames, a.item or None, a.recurring
+        ),
         "launch": lambda: commands.launch(a.restart, commands.stop_requested, run.frames),
         "donate": lambda: commands.donate(
             DonateOptions(dry_run=a.dry_run, rounds=a.repeat), run.frames
@@ -958,6 +1001,16 @@ def _claim_for(arguments: argparse.Namespace, run: RunLog) -> AbstractContextMan
     )
 
 
+def _check_helper(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    """Refuse a `helper` line whose item or flag does not fit its action, before a run opens."""
+    if arguments.command != "helper":
+        return
+    if (arguments.action == "send") != bool(arguments.item):
+        parser.error("helper send 要給要幫的那一件，cancel 不給")
+    if arguments.action == "cancel" and arguments.recurring:
+        parser.error("--recurring 只給 helper send")
+
+
 def main() -> int:
     sys.excepthook = _log_uncaught
     parser = _parser()
@@ -978,8 +1031,10 @@ def main() -> int:
         or arguments.upgrades is not None
         or arguments.minutes is not None
         or arguments.tower
+        or arguments.helpers
     ):
-        parser.error("watch 要給 --next、--upgrades、--tower 或 --minutes")
+        parser.error("watch 要給 --next、--upgrades、--tower、--helpers 或 --minutes")
+    _check_helper(parser, arguments)
     # A hold is a session's, so one with no session would hold nothing.
     if arguments.command == "hold" and not arguments.session:
         parser.error("hold 要給 --session，保留是那個 session 的")

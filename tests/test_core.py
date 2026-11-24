@@ -198,15 +198,21 @@ from ai_coc.parsers.building import (
     PRICE_ROWS,
     PRICE_TOLERANCE,
     free_boost,
+    helper_hut,
     sheet_open,
     boost_sheet,
     game_dialog,
+    helper_rows,
     sheet_offer,
+    helper_plate,
+    helper_prompt,
+    helper_ticked,
     selection_row,
     sheet_running,
     upgrade_sheet,
     panel_wall_menu,
     research_running,
+    helper_stop_prompt,
 )
 from ai_coc.parsers.settings import export_row, window_open, settings_open, more_settings_open
 
@@ -332,7 +338,7 @@ class CoreTests(unittest.TestCase):
         document = parse_village_text(
             json.dumps({
                 "tag": "#TEST",
-                "buildings": [{"data": 1000001, "lvl": 16, "helper_recurrent": True}],
+                "buildings": [{"data": 1000001, "lvl": 16, "gear_up": 1}],
                 "helpers": [{"data": 93000000, "lvl": 1, "helper_cooldown": 36772}],
                 "obstacles": [{"data": 8000009, "cnt": 7}],
                 "a_section_added_next_release": [{"data": 99000001, "lvl": 2}],
@@ -348,7 +354,7 @@ class CoreTests(unittest.TestCase):
         # which is what makes "nothing is thrown away" true rather than a claim
         # about the sections alone.
         [building] = document.entries("buildings")
-        assert (building.model_extra or {})["helper_recurrent"] is True
+        assert (building.model_extra or {})["gear_up"] == 1
         [helper] = document.entries("helpers")
         assert helper.helper_cooldown == 36772
 
@@ -652,6 +658,25 @@ class UpgradeTimerTests(unittest.TestCase):
         # Only the one cooling down carries the instant in the file, and no helper takes a slot.
         assert [row.ready_at for row in export.day["helpers"]] == [cooling.ready_at, None]
         assert [row.role for row in export.day["helpers"]] == [None, None]
+
+    def test_a_helper_recurs_on_the_running_job_of_its_slot_that_carries_the_key(self) -> None:
+        """A finished job keeps `helper_recurrent` too, and is no job to go back to."""
+        export = merge(
+            _village({
+                "heroes": [{"data": 28000004, "lvl": 56, "timer": 3600, "helper_recurrent": True}],
+                "siege_machines": [{"data": 4000087, "lvl": 6, "helper_recurrent": True}],
+                "helpers": [
+                    {"data": 93000000, "lvl": 8, "speeds": "builder", "multiplier": 8},
+                    {"data": 93000001, "lvl": 12, "speeds": "lab", "multiplier": 12},
+                ],
+            }),
+            None,
+            AT,
+        )
+        recurring = {
+            one.data_id: (one.recurring, one.multiplier) for one in helper_cooldowns(export)
+        }
+        assert recurring == {93000000: ("#28000004", 8), 93000001: (None, 12)}
 
     def test_no_clock_tower_or_one_being_upgraded_says_nothing(self) -> None:
         assert clock_tower(_exported(("buildings2", 1000034, None))) is None
@@ -7999,6 +8024,71 @@ class MenuPriceTests(unittest.TestCase):
         assert spend.cancel == (623, 572)
 
 
+class HelperHutTests(unittest.TestCase):
+    """The Helper Hut's window and its dispatch dialog, off the frames of the first dispatches (2026-11-24)."""
+
+    def test_only_the_huts_window_reads_as_one_and_says_whose_page_it_is(self) -> None:
+        shown = {path.name: helper_hut(path.read_bytes()) for path in FRAMES.glob("*.png")}
+        assert {name: slot for name, slot in shown.items() if slot} == {
+            "helper_hut_builder.png": "apprentice",
+            "helper_hut_builder_end.png": "apprentice",
+            "helper_hut_sent.png": "apprentice",
+            "helper_hut_lab.png": "assistant",
+            # The hut stands under its stop dialog, which `_close_hut` answers first.
+            "helper_stop_dialog.png": "apprentice",
+        }
+
+    def test_each_whole_assign_button_is_found_and_one_the_list_cuts_off_is_not(self) -> None:
+        """Seven builder jobs show four whole rows and a fifth cut off, opened or scrolled to the end."""
+        rows = {
+            name: helper_rows((FRAMES / name).read_bytes())
+            for name in (
+                "helper_hut_builder.png",
+                "helper_hut_builder_end.png",
+                "helper_hut_lab.png",
+                "helper_hut_sent.png",
+            )
+        }
+        assert rows == {
+            "helper_hut_builder.png": [373, 458, 543, 628],
+            "helper_hut_builder_end.png": [407, 492, 577, 662],
+            "helper_hut_lab.png": [373, 458],
+            # A dispatch greys the other rows and leaves no 指派 standing.
+            "helper_hut_sent.png": [],
+        }
+
+    def test_only_the_panel_with_a_helper_plate_reads_as_one(self) -> None:
+        plates = {path.name for path in FRAMES.glob("*.png") if helper_plate(path.read_bytes())}
+        assert plates == {"helper_panel_plate.png"}
+
+    def test_only_the_dispatch_dialog_reads_as_one(self) -> None:
+        prompts = {path.name for path in FRAMES.glob("*.png") if helper_prompt(path.read_bytes())}
+        assert prompts == {"helper_dialog.png", "helper_dialog_ticked.png"}
+
+    def test_the_stop_dialog_reads_as_the_wall_dialogs_and_nothing_else(self) -> None:
+        """The game's own two-button dialog, read whatever lies behind it: over the hut on one."""
+        stops = {
+            path.name for path in FRAMES.glob("*.png") if helper_stop_prompt(path.read_bytes())
+        }
+        assert stops == {
+            "helper_stop_dialog.png",
+            "night_wall_dialog.png",
+            "wall_exit_dialog.png",
+            "wall_spend_dialog.png",
+        }
+        # Over the hut, whose grass and bars lie inside the span it searches.
+        assert game_dialog((FRAMES / "helper_stop_dialog.png").read_bytes()) is None
+
+    def test_the_box_reads_ticked_only_with_its_check_drawn(self) -> None:
+        assert not helper_ticked((FRAMES / "helper_dialog.png").read_bytes())
+        assert helper_ticked((FRAMES / "helper_dialog_ticked.png").read_bytes())
+
+    def test_the_helpers_face_on_its_confirm_is_no_cancel(self) -> None:
+        """Read as one, `tap` let a press on 確認 through and `_home` would have answered with it."""
+        for name in ("helper_dialog.png", "helper_dialog_ticked.png"):
+            assert game_dialog((FRAMES / name).read_bytes()) is None, name
+
+
 class HomeTests(unittest.TestCase):
     """Getting back to a village, and how long an unreadable frame is worth waiting on."""
 
@@ -8372,6 +8462,7 @@ class HomeHudTests(unittest.TestCase):
             "stock_white_behind_dark_bar.png",
             "wall_menu_elixir_only.png",
             "hud_day_lab_panel.png",
+            "helper_panel_plate.png",
             "hud_day_shield_split.png",
             "hud_tip_day_gold_pale.png",
             "hud_tip_day_elixir_pale.png",
@@ -8483,6 +8574,7 @@ class HomeHudTests(unittest.TestCase):
             "hud_day_build_panel.png",
             "hud_day_build_panel_apprentice.png",
             "hud_day_lab_panel.png",
+            "helper_panel_plate.png",
             "hud_night_build_panel.png",
             "night_menu_finishing.png",
             "night_wall_menu.png",
@@ -8765,7 +8857,9 @@ class UpgradeSheetOfferTests(unittest.TestCase):
             "night_sheet_lab_low.png",
         }
         opened = {path.name for path in FRAMES.glob("*.png") if sheet_open(path.read_bytes())}
-        assert opened == sheets
+        # The Helper Hut's stop dialog stands over the hut, whose X is a sheet's
+        # and whose green its 確認: `tap` takes only that X, and nothing prices it.
+        assert opened == sheets | {"helper_stop_dialog.png"}
         offered = {path.name for path in FRAMES.glob("*.png") if sheet_offer(path.read_bytes())}
         assert offered == sheets - {
             "sheet_running_gems.png",
